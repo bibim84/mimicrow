@@ -24,18 +24,19 @@ const REVEAL_DIST=150;
 const DIRS=['up','down','left','right'];
 
 // ── 키 정보 ───────────────────────────────────────────────────────
-// hand: 'L'=왼손(ASDF) 'R'=오른손(방향키)
+// hand: 'L'=왼손(WASD) 'R'=오른손(방향키)
+// 왼손도 방향 기호로 표시 — [↑][←][↓][→] 청록색, 방향키는 노랑
 const KI={
-  KeyA:     {hand:'L',dir:'left', lb:'A'},
-  KeyS:     {hand:'L',dir:'down', lb:'S'},
-  KeyD:     {hand:'L',dir:'right',lb:'D'},
-  KeyF:     {hand:'L',dir:'up',   lb:'F'},
+  KeyW:     {hand:'L',dir:'up',   lb:'↑'},
+  KeyA:     {hand:'L',dir:'left', lb:'←'},
+  KeyS:     {hand:'L',dir:'down', lb:'↓'},
+  KeyD:     {hand:'L',dir:'right',lb:'→'},
   ArrowUp:  {hand:'R',dir:'up',   lb:'↑'},
   ArrowDown:{hand:'R',dir:'down', lb:'↓'},
   ArrowLeft:{hand:'R',dir:'left', lb:'←'},
   ArrowRight:{hand:'R',dir:'right',lb:'→'},
 };
-const LKEYS=['KeyA','KeyS','KeyD','KeyF'];
+const LKEYS=['KeyW','KeyA','KeyS','KeyD'];
 const RFOR={up:'ArrowUp',down:'ArrowDown',left:'ArrowLeft',right:'ArrowRight'};
 const JCOL={PERFECT:'#ffee66',GREAT:'#88eeff',GOOD:'#99ff99',MISS:'#ff5555'};
 const JLBL={PERFECT:'PERFECT!',GREAT:'GREAT',GOOD:'GOOD',MISS:'MISS'};
@@ -295,28 +296,29 @@ function drawGround(sc){
 }
 
 // 노트 라벨 표시 (공개 구간)
-// 'right' → 흰색 방향키, 'left' → 청록색 [A], 'both' → 청록+노랑+plus
+// 왼손(WASD) → [↑] 청록  /  오른손(방향키) → ↑ 노랑
+// 조합 → [↑] + ↑  (왼·오른 색으로 구분)
 function drawLabel(n,alpha){
   cx.save();cx.globalAlpha=alpha;
   cx.font='bold 12px monospace';cx.textBaseline='top';cx.textAlign='center';
 
   if(n.type==='both'){
-    // 왼손 (청록 - 완료 시 흰색)
+    // 왼손: [↑] 청록 (완료 시 흰색)
     cx.fillStyle=n.pL?'#fff':'#88eeff';
-    cx.fillText(KI[n.lKey].lb, n.x-11, CY-24);
-    // + 기호 (매우 옅게)
-    cx.fillStyle='rgba(255,255,255,0.22)';
+    cx.fillText('['+KI[n.lKey].lb+']', n.x-14, CY-24);
+    // 구분자
+    cx.fillStyle='rgba(255,255,255,0.2)';
     cx.fillText('+', n.x, CY-24);
-    // 오른손 (노랑 - 완료 시 흰색)
+    // 오른손: ↑ 노랑 (완료 시 흰색)
     cx.fillStyle=n.pR?'#fff':'#ffee88';
-    cx.fillText(KI[n.rKey].lb, n.x+12, CY-24);
+    cx.fillText(KI[n.rKey].lb, n.x+14, CY-24);
   } else if(n.type==='left'){
-    // 왼손만: [A] 스타일, 청록
+    // 왼손만: [↑] 청록
     cx.fillStyle=n.pL?'#fff':'#88eeff';
     cx.fillText('['+KI[n.lKey].lb+']', n.x, CY-24);
   } else {
-    // 오른손만: 방향 기호, 흰색
-    cx.fillStyle='#fff';
+    // 오른손만: ↑ 노랑
+    cx.fillStyle=n.pR?'#fff':'#ffee88';
     cx.fillText(KI[n.rKey].lb, n.x, CY-24);
   }
   cx.restore();
@@ -335,11 +337,12 @@ function rTitle(now){
   // 조작법 안내
   cx.fillStyle='rgba(255,255,255,0.06)';cx.fillRect(60,291,360,20);
   tx('왼손',68,294,9,'#88eeff');
-  tx('A  S  D  F',100,294,9,'#88eeff');
-  tx('+',178,294,9,'#444');
-  tx('← ↑ ↓ →',192,294,9,'#ffee88');
-  tx('오른손',252,294,9,'#ffee88');
-  tx('  →  조합하거나 단독으로',280,294,9,'#333');
+  tx('W A S D',100,294,9,'#88eeff');
+  tx('↑ ← ↓ →',156,294,9,'#88eeff');
+  tx('+',218,294,9,'#444');
+  tx('← ↑ ↓ →',232,294,9,'#ffee88');
+  tx('W A S D',286,294,9,'#ffee88');
+  tx('오른손',338,294,9,'#ffee88');
 }
 
 function rPlay(now){
@@ -392,11 +395,11 @@ function rPlay(now){
     cx.fillStyle='rgba(255,255,255,0.07)';cx.fillRect(0,H-3,W,3);
     cx.fillStyle='rgba(255,255,255,0.28)';cx.fillRect(0,H-3,W*pr,3);
   }
-  // 미니 조작 힌트
-  cx.fillStyle='rgba(255,255,255,0.04)';cx.fillRect(W-122,H-22,114,15);
-  tx('ASDF',W-118,H-20,8,'#88eeff');
-  tx('+',W-90,H-20,8,'#333');
-  tx('← ↑ ↓ →',W-82,H-20,8,'#ffee88');
+  cx.fillStyle='rgba(255,255,255,0.04)';cx.fillRect(W-148,H-22,140,15);
+  tx('[↑←↓→]',W-144,H-20,8,'#88eeff');
+  tx('WASD',W-106,H-20,8,'#88eeff');
+  tx('+',W-80,H-20,8,'#333');
+  tx('← ↑ ↓ →',W-72,H-20,8,'#ffee88');
 }
 
 function rResult(now){
