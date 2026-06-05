@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:6px}
+canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+.h{color:#1a1a1a;font:10px/1 monospace;letter-spacing:1px}
+</style>
+</head>
+<body>
+<canvas id="c" width="480" height="320"></canvas>
+<div class="h">왼손: A S D F  ·  오른손: ← ↑ ↓ →  ·  조합 또는 단독</div>
+<script>
+const cv=document.getElementById('c'),cx=cv.getContext('2d');
+cx.imageSmoothingEnabled=false;
+const W=480,H=320,S=3,GND=250,SPH=13;
+const PCX=130, CY=GND-SPH*S;
+const BPM=115, BEAT=60000/BPM;
+const LEAD=1900, NSPD=(W-PCX)/LEAD, TILE=NSPD*BEAT;
+const WIN_P=50, WIN_GR=120, WIN_GO=200;
+const REVEAL_DIST=150;
+const DIRS=['up','down','left','right'];
+
+// ── 키 정보 ───────────────────────────────────────────────────────
+// hand: 'L'=왼손(ASDF) 'R'=오른손(방향키)
+const KI={
+  KeyA:     {hand:'L',dir:'left', lb:'A'},
+  KeyS:     {hand:'L',dir:'down', lb:'S'},
+  KeyD:     {hand:'L',dir:'right',lb:'D'},
+  KeyF:     {hand:'L',dir:'up',   lb:'F'},
+  ArrowUp:  {hand:'R',dir:'up',   lb:'↑'},
+  ArrowDown:{hand:'R',dir:'down', lb:'↓'},
+  ArrowLeft:{hand:'R',dir:'left', lb:'←'},
+  ArrowRight:{hand:'R',dir:'right',lb:'→'},
+};
+const LKEYS=['KeyA','KeyS','KeyD','KeyF'];
+const RFOR={up:'ArrowUp',down:'ArrowDown',left:'ArrowLeft',right:'ArrowRight'};
+const JCOL={PERFECT:'#ffee66',GREAT:'#88eeff',GOOD:'#99ff99',MISS:'#ff5555'};
+const JLBL={PERFECT:'PERFECT!',GREAT:'GREAT',GOOD:'GOOD',MISS:'MISS'};
+
+// ── 스프라이트 ─────────────────────────────────────────────────────
+const SP={
+  w1:['0001111000','0011111100','0011111110','0011111111','0111111110',
+      '1111111110','1111111110','0111111100','0011111000','0001111000',
+      '0001001000','0001101000','0011101100'],
+  w2:['0001111000','0011111100','0011111110','0011111111','0111111110',
+      '1111111110','1111111110','0111111100','0011111000','0001111000',
+      '0000101000','0001001100','0001110000'],
+  up: ['1000000001','1100011011','0110011111','0011111110','0111111100',
+       '0011111000','0001110000','0000000000','0001001000','0001001000',
+       '0011001100','0000000000','0000000000'],
+  down:['0000000000','0001111000','0011111100','0111111111','1111111110',
+        '1111111110','1111111110','0111111100','0001100000','0001110000',
+        '0011111000','0000000000','0000000000'],
+  left:['0000111000','1111111100','1111111110','1111111111','1111111110',
+        '0111111100','0011111000','0001111000','0001001000','0001001000',
+        '0011001100','0000000000','0000000000'],
+  right:['0001110000','0011111100','0111111110','0111111111','1111111110',
+         '1111111100','1111111000','0111110000','0001001000','0000101000',
+         '0001100000','0011000000','0000000000'],
+};
+const PSPR={up:SP.up,down:SP.down,left:SP.left,right:SP.right};
+
+function drawSpr(d,sx,sy,a=1){
+  cx.save();cx.globalAlpha=a;cx.fillStyle='#fff';
+  for(let r=0;r<d.length;r++)
+    for(let c=0;c<d[r].length;c++)
+      if(d[r][c]==='1') cx.fillRect(sx+c*S|0,sy+r*S|0,S,S);
+  cx.restore();
+}
+function tx(s,x,y,sz,col,al='left'){
+  cx.save();cx.font=`bold ${sz}px monospace`;cx.textAlign=al;cx.textBaseline='top';
+  cx.fillStyle='#000';cx.fillText(s,x+1,y+1);cx.fillStyle=col;cx.fillText(s,x,y);cx.restore();
+}
+
+// ── 오디오 ─────────────────────────────────────────────────────────
+let AC=null,mBus=null;
+const PENTA=[261.63,329.63,392.00,440.00,523.25];
+const BFREQ=[65.41,98.00,130.81];
+const MPAT=[0,2,4,2,3,1,3,4,0,4,2,3,1,2,0,1];
+const BPAT=[0,0,1,0,2,0,1,0,0,0,1,0,2,0,1,0];
+
+function acInit(){
+  if(!AC){
+    AC=new(window.AudioContext||window.webkitAudioContext)();
+    const comp=AC.createDynamicsCompressor();
+    comp.threshold.value=-14;comp.knee.value=8;comp.ratio.value=5;
+    comp.attack.value=0.005;comp.release.value=0.12;comp.connect(AC.destination);
+    mBus=AC.createGain();mBus.gain.value=0.82;mBus.connect(comp);
+  }
+  if(AC.state==='suspended') AC.resume();
+}
+function sOsc(freq,t,vol,dur,type='square'){
+  if(!AC||t<AC.currentTime-0.01) return;
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.connect(g);g.connect(mBus);o.type=type;o.frequency.value=freq;
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vol,t+0.01);
+  g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  o.start(t);o.stop(t+dur+0.02);
+}
+function sKick(t){
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.connect(g);g.connect(mBus);o.type='sine';
+  o.frequency.setValueAtTime(175,t);o.frequency.exponentialRampToValueAtTime(0.001,t+0.22);
+  g.gain.setValueAtTime(0.6,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.28);
+  o.start(t);o.stop(t+0.3);
+}
+function sSnare(t){[200,360,580].forEach(f=>sOsc(f,t,0.065,0.1,'square'));}
+function sHat(t,op){
+  sOsc(8000,t,op?0.052:0.036,op?0.072:0.034,'square');
+  sOsc(11000,t,op?0.036:0.024,op?0.06:0.028,'square');
+}
+function schedBeat(bi,at){
+  const bs=BEAT/1000,p=bi%4,lp=bi%16;
+  if(p===0||p===2) sKick(at);
+  if(p===1||p===3) sSnare(at);
+  sHat(at,false);sHat(at+bs*0.5,true);
+  sOsc(PENTA[MPAT[lp]],at,0.1,bs*0.72,'square');
+  if(p===0||p===2) sOsc(BFREQ[BPAT[lp]],at,0.13,bs*1.75,'sawtooth');
+}
+let gStartAC=0,schedB=-1;
+function schedAhead(now){
+  if(!AC) return;
+  const upTo=Math.floor(((now-t0)/1000+0.32)/(BEAT/1000));
+  while(schedB<upTo){
+    schedB++;
+    const beatAC=gStartAC+schedB*(BEAT/1000);
+    if(beatAC>AC.currentTime) schedBeat(schedB,beatAC);
+  }
+}
+function sfxHit(j,isBoth){
+  const f={PERFECT:920,GREAT:720,GOOD:560}[j];
+  sOsc(f,AC.currentTime+0.005,0.36,0.07);
+  if(isBoth) sOsc(f*1.5,AC.currentTime+0.008,0.18,0.06); // 조합 히트 하모닉
+}
+function sfxMiss(){sOsc(160,AC.currentTime+0.005,0.2,0.18,'sawtooth');}
+
+// ── 게임 상태 ──────────────────────────────────────────────────────
+let mode='title';
+let score,combo,maxCombo,lives,cnt;
+let notes,popups;
+let wFrame=0,wTimer=0;
+let pPose=null,pPoseT=0;
+let t0,nxtBeat,beatNum,bFlash,gScroll=0;
+let pat,pIdx,dieDelay=-1,clearFlag=false;
+let held={};
+
+// ── 패턴 생성 ──────────────────────────────────────────────────────
+// type: 'right'=방향키만 / 'left'=ASDF만 / 'both'=조합
+function genPat(B){
+  const arr=[];let b=4;
+  while(b<B){
+    const pose=DIRS[Math.floor(Math.random()*4)];
+    const r=Math.random();
+    let type,lKey,rKey,ap;
+    if(r<0.38){
+      // 조합: 방향키(포즈) + 임의의 ASDF
+      type='both';rKey=RFOR[pose];
+      lKey=LKEYS[Math.floor(Math.random()*4)];ap=pose;
+    } else if(r<0.70){
+      // 오른손만: 방향키
+      type='right';rKey=RFOR[pose];lKey=null;ap=pose;
+    } else {
+      // 왼손만: ASDF (키 방향이 포즈 결정)
+      type='left';lKey=LKEYS[Math.floor(Math.random()*4)];rKey=null;ap=KI[lKey].dir;
+    }
+    arr.push({beat:b,pose:ap,lKey,rKey,type});
+    b+=Math.random()<0.4?2:1;if(Math.random()<0.07)b++;
+  }
+  return arr;
+}
+
+function startGame(){
+  acInit();
+  score=0;combo=0;maxCombo=0;lives=3;cnt={p:0,gr:0,go:0,m:0};
+  notes=[];popups=[];pPose=null;pPoseT=0;gScroll=0;
+  beatNum=0;pIdx=0;bFlash=0;dieDelay=-1;clearFlag=false;
+  t0=nxtBeat=performance.now();
+  gStartAC=AC.currentTime;schedB=-1;
+  pat=genPat(80);mode='play';
+}
+function addPop(txt,col){
+  popups.push({txt,col,x:PCX,y:CY-38,t:900,vy:-0.2});
+}
+function doMiss(){
+  combo=0;cnt.m++;
+  if(lives>0){lives--;if(lives===0&&dieDelay<0)dieDelay=900;}
+  addPop(JLBL.MISS,JCOL.MISS);sfxMiss();
+}
+function doHit(bd,pose,isBoth){
+  const j=bd<=WIN_P?'PERFECT':bd<=WIN_GR?'GREAT':'GOOD';
+  cnt[{PERFECT:'p',GREAT:'gr',GOOD:'go'}[j]]++;
+  const base={PERFECT:300,GREAT:200,GOOD:100}[j];
+  const mul=isBoth?1.5:1; // 조합 보너스
+  const bonus=Math.min(combo,30)*{PERFECT:10,GREAT:5,GOOD:2}[j];
+  score+=Math.round(base*mul)+bonus;
+  combo++;if(combo>maxCombo)maxCombo=combo;
+  pPose=pose;pPoseT=420;sfxHit(j,isBoth);addPop(JLBL[j],JCOL[j]);
+}
+
+// ── 입력 처리 ──────────────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  if(held[e.code])return;held[e.code]=true;acInit();
+  if(mode!=='play'){
+    if(KI[e.code]||e.code==='Space') startGame();
+    return;
+  }
+  const info=KI[e.code];if(!info)return;
+  e.preventDefault();
+  const now=performance.now();
+  pPose=info.dir;pPoseT=200; // 키 누르면 플레이어 포즈 표시
+
+  // 가장 가까운 판정 범위 내 노트 탐색
+  let best=null,bd=Infinity;
+  for(const n of notes){
+    if(n.j)continue;
+    const d=Math.abs(n.ht-now);
+    if(d<WIN_GO&&d<bd){bd=d;best=n;}
+  }
+  if(!best)return; // 범위 밖 = 공중 입력 (미스 없음)
+
+  const mL=best.lKey===e.code; // 왼손 키 일치?
+  const mR=best.rKey===e.code; // 오른손 키 일치?
+
+  if(!mL&&!mR){
+    // 틀린 키 → MISS
+    best.j=true;doMiss();return;
+  }
+  if(mL)best.pL=true; // 왼손 입력 완료
+  if(mR)best.pR=true; // 오른손 입력 완료
+
+  const done=(!best.lKey||best.pL)&&(!best.rKey||best.pR);
+  if(done){
+    best.j=true;doHit(bd,best.pose,best.type==='both');
+  } else {
+    // 첫 번째 키 성공 - 목표 포즈 힌트로 표시
+    pPose=best.pose;pPoseT=380;
+  }
+});
+document.addEventListener('keyup',e=>{held[e.code]=false;});
+cv.addEventListener('click',()=>{acInit();if(mode!=='play')startGame();});
+
+// ── 메인 루프 ──────────────────────────────────────────────────────
+let lt=0;
+function loop(now){
+  requestAnimationFrame(loop);
+  const dt=Math.min(now-lt,50);lt=now;
+  if((wTimer+=dt)>190){wTimer=0;wFrame^=1;}
+  if(mode==='play'){update(now,dt);schedAhead(now);}
+  render(now);
+}
+function update(now,dt){
+  while(now>=nxtBeat){nxtBeat+=BEAT;beatNum++;bFlash=200;}
+  gScroll+=dt*NSPD;
+
+  // 노트 스폰 (패턴 → 라이브 노트 오브젝트 생성)
+  while(pIdx<pat.length){
+    const p=pat[pIdx];const ht=t0+p.beat*BEAT;
+    if(now>=ht-LEAD){
+      notes.push({...p,ht,j:false,pL:false,pR:false});
+      pIdx++;
+    }else break;
+  }
+  for(const n of notes){
+    n.x=PCX+(n.ht-now)*NSPD;
+    if(!n.j&&now>n.ht+WIN_GO){n.j=true;doMiss();}
+  }
+  notes=notes.filter(n=>!(n.j&&n.ht<now-500));
+  if(pPoseT>0&&(pPoseT-=dt)<=0)pPose=null;
+  if(bFlash>0)bFlash-=dt;
+  for(const p of popups){p.t-=dt;p.y+=p.vy;}
+  popups=popups.filter(p=>p.t>0);
+  if(dieDelay>=0&&(dieDelay-=dt)<=0)mode='gameover';
+  if(!clearFlag&&dieDelay<0&&pIdx>=pat.length&&notes.every(n=>n.j)){
+    clearFlag=true;setTimeout(()=>{if(mode==='play')mode='clear';},500);
+  }
+}
+
+// ── 렌더 ───────────────────────────────────────────────────────────
+function render(now){
+  cx.fillStyle='#000';cx.fillRect(0,0,W,H);
+  if(mode==='title')rTitle(now);
+  else if(mode==='play')rPlay(now);
+  else rResult(now);
+}
+function drawGround(sc){
+  const off=sc%TILE;
+  cx.fillStyle='rgba(255,255,255,0.16)';
+  for(let x=-off;x<W+TILE;x+=TILE) cx.fillRect(x|0,GND-4,2,4);
+  cx.fillStyle='rgba(255,255,255,0.06)';
+  for(let x=-off+TILE/2;x<W+TILE;x+=TILE) cx.fillRect(x|0,GND-2,1,2);
+  cx.fillStyle='#fff';cx.fillRect(0,GND,W,2);
+}
+
+// 노트 라벨 표시 (공개 구간)
+// 'right' → 흰색 방향키, 'left' → 청록색 [A], 'both' → 청록+노랑+plus
+function drawLabel(n,alpha){
+  cx.save();cx.globalAlpha=alpha;
+  cx.font='bold 12px monospace';cx.textBaseline='top';cx.textAlign='center';
+
+  if(n.type==='both'){
+    // 왼손 (청록 - 완료 시 흰색)
+    cx.fillStyle=n.pL?'#fff':'#88eeff';
+    cx.fillText(KI[n.lKey].lb, n.x-11, CY-24);
+    // + 기호 (매우 옅게)
+    cx.fillStyle='rgba(255,255,255,0.22)';
+    cx.fillText('+', n.x, CY-24);
+    // 오른손 (노랑 - 완료 시 흰색)
+    cx.fillStyle=n.pR?'#fff':'#ffee88';
+    cx.fillText(KI[n.rKey].lb, n.x+12, CY-24);
+  } else if(n.type==='left'){
+    // 왼손만: [A] 스타일, 청록
+    cx.fillStyle=n.pL?'#fff':'#88eeff';
+    cx.fillText('['+KI[n.lKey].lb+']', n.x, CY-24);
+  } else {
+    // 오른손만: 방향 기호, 흰색
+    cx.fillStyle='#fff';
+    cx.fillText(KI[n.rKey].lb, n.x, CY-24);
+  }
+  cx.restore();
+}
+
+function rTitle(now){
+  drawGround(now*NSPD);
+  cx.fillStyle='#fff';cx.fillRect(30,63,W-60,2);cx.fillRect(30,213,W-60,2);
+  tx('TDF',W/2,80,62,'#fff','center');
+  tx('THE DANCING FOWL',W/2,152,13,'#555','center');
+  drawSpr(wFrame?SP.w2:SP.w1,W/2-50,168);
+  drawSpr(PSPR.right,W/2+30,168,0.3);
+  if(Math.floor(now/550)%2===0)
+    tx('PRESS ANY KEY TO START',W/2,272,13,'#fff','center');
+
+  // 조작법 안내
+  cx.fillStyle='rgba(255,255,255,0.06)';cx.fillRect(60,291,360,20);
+  tx('왼손',68,294,9,'#88eeff');
+  tx('A  S  D  F',100,294,9,'#88eeff');
+  tx('+',178,294,9,'#444');
+  tx('← ↑ ↓ →',192,294,9,'#ffee88');
+  tx('오른손',252,294,9,'#ffee88');
+  tx('  →  조합하거나 단독으로',280,294,9,'#333');
+}
+
+function rPlay(now){
+  if(bFlash>0){
+    cx.fillStyle=`rgba(255,255,255,${(bFlash/200)*0.11})`;
+    cx.fillRect(0,GND-3,W,5);
+  }
+  drawGround(gScroll);
+  cx.save();cx.strokeStyle='rgba(255,255,255,0.05)';cx.setLineDash([3,8]);cx.lineWidth=1;
+  cx.beginPath();cx.moveTo(PCX,70);cx.lineTo(PCX,GND);cx.stroke();cx.setLineDash([]);cx.restore();
+
+  // ── 스승 까마귀 ─────────────────────────────────────────────────
+  for(const n of notes){
+    if(n.j||n.x<-40||n.x>W+20) continue;
+    const dist=Math.max(0,n.x-PCX);
+    if(dist>REVEAL_DIST){
+      // 멀리: 걷는 실루엣만 (포즈·키 숨김)
+      const sa=Math.min(0.38,0.05+(1-Math.min(1,dist/(W-PCX)))*0.33);
+      drawSpr(SP.w1,n.x-15,CY,sa);
+    } else {
+      // 가까워짐: 포즈 + 키 라벨 공개
+      const rt=1-dist/REVEAL_DIST;
+      drawLabel(n,Math.min(1,rt*1.18));
+      drawSpr(PSPR[n.pose],n.x-15,CY,Math.min(0.82,0.1+rt*0.72));
+    }
+  }
+
+  // ── 플레이어 까마귀 (걷기) ─────────────────────────────────────
+  drawSpr(pPose?PSPR[pPose]:(wFrame?SP.w2:SP.w1),PCX-15,CY,1.0);
+
+  // 팝업
+  for(const p of popups){
+    const a=Math.max(0,p.t/900);
+    cx.save();cx.globalAlpha=a;tx(p.txt,p.x,p.y,16,p.col,'center');cx.restore();
+  }
+
+  // ── HUD ──────────────────────────────────────────────────────────
+  for(let i=0;i<3;i++){
+    cx.fillStyle=i<lives?'#fff':'#1c1c1c';
+    cx.font='bold 15px monospace';cx.textAlign='left';cx.textBaseline='top';
+    cx.fillText('♥',10+i*20,11);
+  }
+  tx('♩ '+String(score).padStart(7,'0'),W/2,10,13,'#fff','center');
+  if(combo>=3){
+    const cc=combo>=20?'#ffee33':combo>=10?'#88eeff':'#888';
+    tx(combo+' COMBO',W-10,10,12,cc,'right');
+  }
+  if(pat.length>0){
+    const pr=Math.min(1,pIdx/pat.length);
+    cx.fillStyle='rgba(255,255,255,0.07)';cx.fillRect(0,H-3,W,3);
+    cx.fillStyle='rgba(255,255,255,0.28)';cx.fillRect(0,H-3,W*pr,3);
+  }
+  // 미니 조작 힌트
+  cx.fillStyle='rgba(255,255,255,0.04)';cx.fillRect(W-122,H-22,114,15);
+  tx('ASDF',W-118,H-20,8,'#88eeff');
+  tx('+',W-90,H-20,8,'#333');
+  tx('← ↑ ↓ →',W-82,H-20,8,'#ffee88');
+}
+
+function rResult(now){
+  const isClear=mode==='clear';
+  cx.fillStyle='rgba(255,255,255,0.04)';cx.fillRect(78,42,324,236);
+  cx.fillStyle='rgba(255,255,255,0.3)';cx.fillRect(78,42,324,2);cx.fillRect(78,278,324,2);
+  tx(isClear?'STAGE CLEAR':'GAME OVER',W/2,58,isClear?22:20,isClear?'#ffee66':'#ff5555','center');
+  const total=cnt.p+cnt.gr+cnt.go+cnt.m||1;
+  const acc=Math.round((cnt.p*100+cnt.gr*80+cnt.go*50)/total);
+  const g=acc>=95?'S':acc>=80?'A':acc>=65?'B':acc>=45?'C':'D';
+  const gc={S:'#ffee22',A:'#99ff99',B:'#88ccff',C:'#ffaa44',D:'#ff6666'}[g];
+  tx(g,W/2,94,70,gc,'center');
+  tx(acc+'%',W/2,167,11,'#444','center');
+  const lx=100,rx=382;
+  tx('SCORE',    lx,183,11,'#444');tx(String(score).padStart(7,'0'),rx,183,11,'#fff','right');
+  tx('MAX COMBO',lx,199,11,'#444');tx(String(maxCombo),            rx,199,11,'#fff','right');
+  cx.fillStyle='rgba(255,255,255,0.05)';cx.fillRect(88,215,304,58);
+  [['PERFECT',cnt.p,JCOL.PERFECT],['GREAT',cnt.gr,JCOL.GREAT],
+   ['GOOD',cnt.go,JCOL.GOOD],['MISS',cnt.m,JCOL.MISS]].forEach(([l,v,c],i)=>{
+    tx(l,96,219+i*14,10,c);tx(String(v),290,219+i*14,10,c,'right');
+  });
+  drawSpr(wFrame?SP.w2:SP.w1,W/2-15,248);
+  if(Math.floor(now/600)%2===0)
+    tx('PRESS ANY KEY TO RETRY',W/2,286,11,'#3a3a3a','center');
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
